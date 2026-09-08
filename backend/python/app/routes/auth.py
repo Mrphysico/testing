@@ -29,7 +29,83 @@ VALID_ROLES = {"superadmin", "police", "hospital"}
 
 
 def normalize_phone(phone: str) -> str:
-    return "".join(character for character in phone if character.isdigit())
+    digits = "".join(character for character in str(phone or "") if character.isdigit())
+    return digits[-10:] if len(digits) >= 10 else digits
+
+
+def phones_match(p1: str, p2: str) -> bool:
+    d1 = "".join(c for c in str(p1 or "") if c.isdigit())
+    d2 = "".join(c for c in str(p2 or "") if c.isdigit())
+    if not d1 or not d2:
+        return False
+    if d1 == d2:
+        return True
+    if len(d1) >= 10 and len(d2) >= 10 and d1[-10:] == d2[-10:]:
+        return True
+    return False
+
+
+def normalize_plate(plate: str) -> str:
+    return "".join(character.upper() for character in str(plate or "") if character.isalnum())
+
+
+def find_vehicle_by_plate(db: Session, plate: str):
+    clean = normalize_plate(plate)
+    if not clean:
+        return None
+    for v in db.query(Vehicle).all():
+        if normalize_plate(v.plate_number) == clean:
+            return v
+    return None
+
+
+def get_or_create_vehicle_and_contact(db: Session, plate_number: str, phone: str, name: str):
+    vehicle = find_vehicle_by_plate(db, plate_number)
+    if vehicle:
+        contact = next(
+            (item for item in db.query(EmergencyContact).filter(EmergencyContact.vehicle_id == vehicle.id).all()
+             if phones_match(item.phone, phone)),
+            None
+        )
+        if not contact:
+            contact = EmergencyContact(
+                vehicle_id=vehicle.id,
+                name=name.strip(),
+                phone=phone.strip(),
+                relation="Family Contact",
+                address=vehicle.owner_address or "Registered Family Contact"
+            )
+            db.add(contact)
+            db.commit()
+            db.refresh(contact)
+        return vehicle, contact
+    else:
+        clean_plate = plate_number.strip().upper()
+        vehicle = Vehicle(
+            owner_name=name.strip(),
+            owner_phone=phone.strip(),
+            owner_address="Registered Family Address",
+            type="car",
+            plate_number=clean_plate,
+            status="on_road",
+            latitude=19.9975,
+            longitude=73.7898
+        )
+        db.add(vehicle)
+        db.flush()
+
+        contact = EmergencyContact(
+            vehicle_id=vehicle.id,
+            name=name.strip(),
+            phone=phone.strip(),
+            relation="Family Contact / Owner",
+            address="Registered Family Contact"
+        )
+        db.add(contact)
+        db.commit()
+        db.refresh(vehicle)
+        db.refresh(contact)
+        return vehicle, contact
 
 
 @router.get("/users", response_model=list[UserOut])
@@ -232,31 +308,20 @@ def login(credentials: UserLogin, db: Session = Depends(get_db)):
 @router.post("/send-signup-otp", response_model=OtpResponse)
 def send_signup_otp(payload: SignupOtpRequest, db: Session = Depends(get_db)):
     """
-    Validates family vehicle and phone match, generates a 6-digit OTP,
-    and dispatches it to the user's email and phone.
+    Validates user email, retrieves or auto-registers the vehicle and emergency contact,
+    generates a 6-digit OTP, and dispatches it to the user's email and phone.
     """
     normalized_email = payload.email.strip().lower()
     if db.query(User).filter(User.email == normalized_email).first():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered. Please log in.")
 
-    vehicle = db.query(Vehicle).filter(Vehicle.plate_number == payload.plate_number.upper().strip()).first()
-    if not vehicle:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No registered vehicle matches plate '{payload.plate_number.upper().strip()}'.",
-        )
-
-    requested_phone = normalize_phone(payload.phone)
-    contact = next(
-        (item for item in db.query(EmergencyContact).filter(EmergencyContact.vehicle_id == vehicle.id).all()
-         if normalize_phone(item.phone) == requested_phone),
-        None,
+    # Get existing vehicle or auto-register new family vehicle & emergency contact
+    vehicle, contact = get_or_create_vehicle_and_contact(
+        db,
+        plate_number=payload.plate_number,
+        phone=payload.phone,
+        name=payload.name
     )
-    if not contact:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="The provided phone number is not registered as an emergency contact for this vehicle.",
-        )
 
     # Generate OTP code
     otp_code = generate_otp(6)
@@ -290,26 +355,18 @@ def verify_signup_otp(payload: SignupOtpVerify, db: Session = Depends(get_db)):
     if db.query(User).filter(User.email == normalized_email).first():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered.")
 
-    vehicle = db.query(Vehicle).filter(Vehicle.plate_number == payload.plate_number.upper().strip()).first()
-    if not vehicle:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No registered family vehicle matches that plate number.")
-
-    requested_phone = normalize_phone(payload.phone)
-    contact = next(
-        (item for item in db.query(EmergencyContact).filter(EmergencyContact.vehicle_id == vehicle.id).all()
-         if normalize_phone(item.phone) == requested_phone),
-        None,
-    )
-    if not contact:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Use the phone number registered as this vehicle's emergency family contact.",
-        )
-
     # Verify the OTP code
     is_valid, err_msg = verify_otp(db, email=normalized_email, otp_code=payload.otp_code, purpose="signup")
     if not is_valid:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err_msg)
+
+    # Get or auto-register vehicle & contact
+    vehicle, contact = get_or_create_vehicle_and_contact(
+        db,
+        plate_number=payload.plate_number,
+        phone=payload.phone,
+        name=payload.name
+    )
 
     # Create the user
     user = User(
@@ -357,32 +414,25 @@ def verify_signup_otp(payload: SignupOtpVerify, db: Session = Depends(get_db)):
 
 @router.post("/public-signup", response_model=Token, status_code=status.HTTP_201_CREATED)
 def public_signup(payload: PublicSignup, db: Session = Depends(get_db)):
-    """Create a public account only when its phone matches a registered family contact."""
-    if db.query(User).filter(User.email == payload.email).first():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered.")
+    """Create a public family account with auto-registered vehicle and emergency contact."""
+    normalized_email = payload.email.strip().lower()
+    if db.query(User).filter(User.email == normalized_email).first():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered. Please log in.")
 
-    vehicle = db.query(Vehicle).filter(Vehicle.plate_number == payload.plate_number.upper()).first()
-    if not vehicle:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No registered family vehicle matches that plate number.")
-
-    requested_phone = normalize_phone(payload.phone)
-    contact = next(
-        (item for item in db.query(EmergencyContact).filter(EmergencyContact.vehicle_id == vehicle.id).all()
-         if normalize_phone(item.phone) == requested_phone),
-        None,
+    # Get or auto-register vehicle & contact
+    vehicle, contact = get_or_create_vehicle_and_contact(
+        db,
+        plate_number=payload.plate_number,
+        phone=payload.phone,
+        name=payload.name
     )
-    if not contact:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Use the phone number registered as this vehicle's emergency family contact.",
-        )
 
     user = User(
-        name=payload.name,
-        email=payload.email,
+        name=payload.name.strip(),
+        email=normalized_email,
         password_hash=get_password_hash(payload.password),
         role="public",
-        phone=payload.phone,
+        phone=payload.phone.strip(),
     )
     db.add(user)
     db.flush()

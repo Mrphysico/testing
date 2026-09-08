@@ -51,6 +51,11 @@ if (FRONTEND_DIR / "css").exists():
 if (FRONTEND_DIR / "js").exists():
     app.mount("/js", StaticFiles(directory=str(FRONTEND_DIR / "js")), name="js")
 
+# Mount /javascript static folder for complete routing compatibility
+js_dir = FRONTEND_DIR if FRONTEND_DIR.name == "javascript" else FRONTEND_DIR / "javascript"
+if js_dir.exists():
+    app.mount("/javascript", StaticFiles(directory=str(js_dir), html=True), name="javascript")
+
 
 # CORS configuration
 app.add_middleware(
@@ -343,8 +348,13 @@ def startup_event():
 
 
 @app.get("/")
+@app.get("/index.html")
+@app.get("/javascript")
+@app.get("/javascript/index.html")
 def read_root():
     frontend_file = FRONTEND_DIR / "index.html"
+    if not frontend_file.exists():
+        frontend_file = FRONTEND_DIR.parent / "index.html"
     if frontend_file.exists():
         with frontend_file.open("r", encoding="utf-8") as f:
             return HTMLResponse(
