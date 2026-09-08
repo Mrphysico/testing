@@ -32,28 +32,29 @@ def send_sms(to_phone: str, message: str) -> bool:
     timestamp = datetime.utcnow().isoformat()
     logger.info(f"Attempting to send SMS to {to_phone}: {message}")
     
-    # Check if Twilio keys are configured
+    # Check if real Twilio keys are configured
     if settings.TWILIO_ACCOUNT_SID and settings.TWILIO_AUTH_TOKEN and settings.TWILIO_PHONE_NUMBER:
-        try:
-            client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-            client.messages.create(
-                body=message,
-                from_=settings.TWILIO_PHONE_NUMBER,
-                to=to_phone
-            )
-            logger.info(f"Twilio SMS successfully sent to {to_phone}")
-            
-            # Store in virtual log too for easy UI testing verification
-            virtual_sms_logs.append({
-                "to_phone": to_phone,
-                "message": message,
-                "timestamp": timestamp,
-                "gateway": "twilio",
-                "status": "sent"
-            })
-            return True
-        except Exception as e:
-            logger.error(f"Twilio SMS sending failed: {e}. Falling back to virtual gateway.")
+        if settings.TWILIO_ACCOUNT_SID.startswith("AC") and len(settings.TWILIO_ACCOUNT_SID) == 34 and not settings.TWILIO_ACCOUNT_SID.startswith("AC_"):
+            try:
+                client = TwilioClient(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+                client.messages.create(
+                    body=message,
+                    from_=settings.TWILIO_PHONE_NUMBER,
+                    to=to_phone
+                )
+                logger.info(f"Twilio SMS successfully sent to {to_phone}")
+                
+                # Store in virtual log too for easy UI testing verification
+                virtual_sms_logs.append({
+                    "to_phone": to_phone,
+                    "message": message,
+                    "timestamp": timestamp,
+                    "gateway": "twilio",
+                    "status": "sent"
+                })
+                return True
+            except Exception as e:
+                logger.error(f"Twilio SMS sending failed: {e}. Falling back to virtual gateway.")
     
     # Virtual SMS gateway fallback (Enabled by default for development)
     virtual_sms_logs.append({

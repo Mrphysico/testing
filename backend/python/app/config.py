@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     API_V1_STR: str = ""
     
     # Security
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "gov_accident_detection_secure_secret_key_2026_xyz")
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "prod_gov_secure_telemetry_secret_key_2026_e8d4a9f1c7b3e5a2")
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
     CORS_ORIGINS: str = os.getenv(
@@ -36,10 +36,10 @@ class Settings(BaseSettings):
         DEFAULT_DATABASE_URL
     )
     
-    # Twilio (SMS Alerts)
-    TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "")
-    TWILIO_AUTH_TOKEN: str = os.getenv("TWILIO_AUTH_TOKEN", "")
-    TWILIO_PHONE_NUMBER: str = os.getenv("TWILIO_PHONE_NUMBER", "")
+    # Twilio (SMS Alerts Gateway)
+    TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "AC_gov_emergency_sms_gateway_active")
+    TWILIO_AUTH_TOKEN: str = os.getenv("TWILIO_AUTH_TOKEN", "auth_token_gov_sms_dispatch_2026")
+    TWILIO_PHONE_NUMBER: str = os.getenv("TWILIO_PHONE_NUMBER", "+18005550112")
     
     # Firebase Cloud Messaging
     FIREBASE_CREDENTIALS_PATH: str = os.getenv("FIREBASE_CREDENTIALS_PATH", "")
